@@ -108,6 +108,20 @@ class DriveClient:
         ).execute()
         return file.get('id')
 
+    def trash_file(self, file_id):
+        """파일을 휴지통으로 이동 (복구 가능)"""
+        self.service.files().update(
+            fileId=file_id,
+            body={'trashed': True}
+        ).execute()
+
+    def get_file_info(self, file_id):
+        """파일 메타데이터 조회"""
+        return self.service.files().get(
+            fileId=file_id,
+            fields='id, name, mimeType, size, thumbnailLink'
+        ).execute()
+
     def get_or_create_folder(self, name, parent_id):
         """폴더 찾거나 없으면 생성"""
         folder = self.find_folder(name, parent_id)
