@@ -63,8 +63,11 @@ def _blur_score(image_path):
         if img is None:
             # HEIC 등 OpenCV가 못 읽는 포맷 → Pillow로 변환
             if PIL_AVAILABLE:
-                pil = Image.open(image_path).convert('RGB')
-                img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+                try:
+                    pil = Image.open(image_path).convert('RGB')
+                    img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+                except Exception:
+                    return 999
             else:
                 return 999
 
@@ -91,8 +94,11 @@ def _brightness_score(image_path):
         img = cv2.imread(image_path)
         if img is None:
             if PIL_AVAILABLE:
-                pil = Image.open(image_path).convert('RGB')
-                img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+                try:
+                    pil = Image.open(image_path).convert('RGB')
+                    img = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+                except Exception:
+                    return 128
             else:
                 return 128
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -204,12 +210,16 @@ def _select_batch(model, photo_paths, target_count):
 
     try:
         response = model.generate_content(content)
+
+        if not response.text or not response.text.strip():
+            return valid_paths
+
         raw = response.text.strip()
 
         indices = []
         for token in raw.replace(' ', '').split(','):
             token = token.strip()
-            if token.isdigit():
+            if token != '' and token.isdigit():
                 idx = int(token)
                 if 0 <= idx < len(valid_paths):
                     indices.append(idx)
@@ -252,8 +262,12 @@ def select_best_shots(photo_paths, target_count=None, api_key=None):
         print("  [2단계] Gemini API 키 없음, 스킵")
         return after_tech
 
-    genai.configure(api_key=key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        genai.configure(api_key=key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        print(f"  [2단계] Gemini API 키가 유효하지 않거나 초기화 실패: {e}")
+        return after_tech
 
     total = len(after_tech)
     num_batches = math.ceil(total / BATCH_SIZE)

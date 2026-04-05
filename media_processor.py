@@ -38,8 +38,8 @@ def parse_folder_name(folder_name):
     end_str = match.group(3)
 
     try:
-        start = datetime.strptime('20' + start_str, '%Y%m%d')
-        end = datetime.strptime('20' + end_str, '%Y%m%d')
+        start = datetime.strptime(start_str, '%y%m%d')
+        end = datetime.strptime(end_str, '%y%m%d')
     except ValueError:
         return None
 
@@ -92,10 +92,17 @@ def get_video_datetime(file_path):
                 for fmt in ('%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ',
                             '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S%z'):
                     try:
-                        dt = datetime.strptime(raw[:26], fmt[:len(raw)])
+                        if fmt == '%Y-%m-%dT%H:%M:%S%z':
+                            dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.strptime(raw, fmt)
                         return dt.replace(tzinfo=None)
                     except ValueError:
                         pass
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
     except Exception:
         pass
     return None
@@ -116,7 +123,10 @@ def get_datetime_from_filename(file_path):
                 if len(groups) == 6:
                     return datetime(*[int(g) for g in groups])
                 elif len(groups) == 3:
-                    return datetime(*[int(g) for g in groups])
+                    year, month, day = [int(g) for g in groups]
+                    if not (1 <= month <= 12 and 1 <= day <= 31):
+                        raise ValueError("date out of range")
+                    return datetime(year, month, day)
             except ValueError:
                 pass
     return None
@@ -170,6 +180,9 @@ def get_video_duration(file_path):
             capture_output=True, text=True, timeout=10
         )
         data = json.loads(result.stdout)
-        return float(data['format']['duration'])
+        try:
+            return float(data['format']['duration'])
+        except KeyError:
+            return 0
     except Exception:
         return 0
