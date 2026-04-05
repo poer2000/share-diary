@@ -50,7 +50,11 @@ def download_trip_media(drive_client, folder, download_dir, return_meta=False):
     os.makedirs(trip_dir, exist_ok=True)
 
     print(f"  파일 목록 가져오는 중...")
-    drive_files = drive_client.list_media_files(folder_id)
+    try:
+        drive_files = drive_client.list_media_files(folder_id)
+    except Exception as e:
+        print(f"  파일 목록 조회 실패: {e}")
+        return []
 
     if not drive_files:
         return []
@@ -60,13 +64,23 @@ def download_trip_media(drive_client, folder, download_dir, return_meta=False):
     results = []
     for f in tqdm(drive_files, desc='  다운로드', unit='파일'):
         local_path = os.path.join(trip_dir, f['name'])
-        if not os.path.exists(local_path):
-            try:
-                drive_client.download_file(f['id'], local_path)
-            except Exception as e:
-                print(f"\n  다운로드 실패: {f['name']} ({e})")
-                continue
-        results.append((local_path, f) if return_meta else local_path)
+
+        # 이미 다운로드된 유효한 파일은 스킵
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            results.append((local_path, f) if return_meta else local_path)
+            continue
+
+        try:
+            drive_client.download_file(f['id'], local_path)
+            results.append((local_path, f) if return_meta else local_path)
+        except Exception as e:
+            print(f"\n  다운로드 실패: {f['name']} ({e})")
+            # 불완전하게 다운로드된 파일 정리
+            if os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                except OSError:
+                    pass
 
     return results
 
@@ -103,13 +117,16 @@ def process_trip_video(drive_client, folder, args):
     print(f"  사진: {len(photos)}장 / 영상: {len(videos)}개")
 
     if not args.no_ai and photos:
-        target_photos = max(5, int(args.minutes * 60 * 0.7 / 4.5))
-        print(f"  AI 베스트컷 선별 중... (목표 {target_photos}장)")
-        photos = select_best_shots(
-            photos,
-            target_count=target_photos,
-            api_key=os.getenv('GEMINI_API_KEY')
-        )
+        try:
+            target_photos = max(5, int(args.minutes * 60 * 0.7 / 4.5))
+            print(f"  AI 베스트컷 선별 중... (목표 {target_photos}장)")
+            photos = select_best_shots(
+                photos,
+                target_count=target_photos,
+                api_key=os.getenv('GEMINI_API_KEY')
+            )
+        except Exception as e:
+            print(f"  [경고] AI 선별 실패: {e}, 전체 사진 사용")
 
     final_media = sort_media_by_time(photos + videos)
 
@@ -221,7 +238,11 @@ def main():
 
     # Drive 연결
     print("Google Drive 연결 중...")
-    drive_client = DriveClient()
+    try:
+        drive_client = DriveClient()
+    except Exception as e:
+        print(f"[오류] Google Drive 연결 실패: {e}")
+        sys.exit(1)
 
     travel_folder = drive_client.find_folder(TRAVEL_FOLDER_NAME)
     if not travel_folder:
@@ -244,11 +265,16 @@ def main():
                 print(f"  {f['name']}  (형식 불일치)")
         return
 
-    # 폴더 필터링
+    # 폴더 필터링 (정확한 도시명 매칭 우선, 폴백으로 부분 매칭)
     if args.trip:
-        trip_folders = [f for f in trip_folders if args.trip in f['name']]
+        # 1순위: parse된 city명 정확 매칭
+        exact = [f for f in trip_folders
+                 if (parse_folder_name(f['name']) or {}).get('city', '') == args.trip]
+        # 2순위: 폴더명 부분 포함
+        partial = [f for f in trip_folders if args.trip in f['name']] if not exact else []
+        trip_folders = exact or partial
         if not trip_folders:
-            print(f"'{args.trip}'이 포함된 폴더를 찾을 수 없습니다.")
+            print(f"'{args.trip}'에 해당하는 폴더를 찾을 수 없습니다.")
             sys.exit(1)
 
     print(f"\n처리할 여행: {len(trip_folders)}개")

@@ -14,6 +14,7 @@ import os
 import json
 import random
 import shutil
+import shutil as _shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -55,9 +56,15 @@ def find_font(candidates):
 FONT_BOLD = find_font(FONT_CANDIDATES)
 FONT_REGULAR = find_font(FONT_SMALL_CANDIDATES)
 
+# Fix 6: module-level FFmpeg availability flag, checked once at import
+_FFMPEG_OK = _shutil.which('ffmpeg') is not None
+
 
 def _ffmpeg(args, desc=''):
     """FFmpeg 실행 헬퍼"""
+    if not _FFMPEG_OK:
+        print("  [FFmpeg] ffmpeg가 설치되어 있지 않습니다.")
+        return False
     cmd = ['ffmpeg', '-y'] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -95,8 +102,7 @@ def create_intro(output_path, city, start_date, end_date, duration=4):
         shadow=True, alpha_fade=fade
     )
 
-    vf = f"[v];[v]{title_filter},{sub_filter}"
-    # 단순화: 두 필터를 연결
+    # Fix 1: removed dead line; keep only the correct assignment
     vf = f"{title_filter},{sub_filter}"
 
     return _ffmpeg([
@@ -147,8 +153,9 @@ def create_outro(output_path, city, duration=3):
 def photo_to_clip(photo_path, output_path, duration=4, date_label=None):
     """사진 → Ken Burns 효과 영상 클립"""
 
-    # 먼저 1920x1080으로 스케일/패드 (zoompan 입력 크게)
+    # Fix 5: pre-scale to cap input at 4K before zoompan to avoid memory issues
     scale_filter = (
+        f"scale='min(iw,3840)':'min(ih,2160)':force_original_aspect_ratio=decrease,"
         f"scale={WIDTH*2}:{HEIGHT*2}:force_original_aspect_ratio=increase,"
         f"crop={WIDTH*2}:{HEIGHT*2}"
     )
@@ -169,15 +176,14 @@ def photo_to_clip(photo_path, output_path, duration=4, date_label=None):
     ]
     kb_filter = random.choice(effects)
 
-    # 자막
-    subtitle = ""
+    # Fix 2: build filter list and join, avoiding trailing comma when date_label is None
+    filters = [scale_filter, kb_filter, f"scale={WIDTH}:{HEIGHT}"]
     if date_label:
-        subtitle = "," + _font_filter(
+        filters.append(_font_filter(
             date_label, FONT_REGULAR, 34, 'white@0.9',
             '40', f'{HEIGHT}-75', shadow=True
-        )
-
-    vf = f"{scale_filter},{kb_filter},scale={WIDTH}:{HEIGHT}{subtitle}"
+        ))
+    vf = ",".join(filters)
 
     ok = _ffmpeg([
         '-loop', '1',
@@ -207,17 +213,21 @@ def video_to_clip(video_path, output_path, max_clip_sec=12, date_label=None):
         start = total * 0.08
         clip_dur = min(max_clip_sec, total * 0.7)
 
-    subtitle = ""
+    # Fix 4: guard against zero or negative clip duration
+    if clip_dur <= 0:
+        return False
+
+    # Fix 2: build filter list and join, avoiding trailing comma when date_label is None
+    base_filters = [
+        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease",
+        f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2",
+    ]
     if date_label:
-        subtitle = "," + _font_filter(
+        base_filters.append(_font_filter(
             date_label, FONT_REGULAR, 34, 'white@0.9',
             '40', f'{HEIGHT}-75', shadow=True
-        )
-
-    vf = (
-        f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-        f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2{subtitle}"
-    )
+        ))
+    vf = ",".join(base_filters)
 
     return _ffmpeg([
         '-ss', f'{start:.2f}',
@@ -366,6 +376,9 @@ class VideoCreator:
 
                     if ok and os.path.exists(out):
                         clips.append(out)
+                    # Fix 3: warn if clip function returned False and file was not created
+                    elif not ok and not os.path.exists(out):
+                        print(f"  [경고] 클립 생성 실패: {f}")
                     clip_idx += 1
 
             # 아웃트로

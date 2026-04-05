@@ -94,30 +94,40 @@ def group_duplicates(photos: list[PhotoInfo]) -> list[list[PhotoInfo]]:
     for p in photos:
         p.phash = _compute_hash(p)
 
-    groups = []
-    assigned = set()
+    # Union-Find helpers
+    parent = {i: i for i in range(len(photos))}
 
-    for i, p in enumerate(photos):
-        if i in assigned or p.phash is None:
-            continue
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
 
-        group = [p]
-        assigned.add(i)
+    def union(i, j):
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[ri] = rj
 
-        for j, q in enumerate(photos):
-            if j in assigned or q.phash is None:
-                continue
-            dist = p.phash - q.phash
-            if dist <= HASH_THRESHOLD_SIMILAR:
-                group.append(q)
-                assigned.add(j)
+    # Build list of indices with valid hashes
+    valid_indices = [(i, photos[i].phash) for i in range(len(photos)) if photos[i].phash is not None]
 
-        groups.append(group)
+    # Iterate pairs once and union if similar
+    for a in range(len(valid_indices)):
+        ia, ha = valid_indices[a]
+        for b in range(a + 1, len(valid_indices)):
+            ib, hb = valid_indices[b]
+            if ha - hb <= HASH_THRESHOLD_SIMILAR:
+                union(ia, ib)
 
-    # 해시 없는 사진 처리
-    for i, p in enumerate(photos):
-        if i not in assigned:
-            groups.append([p])
+    # Collect groups from union-find structure
+    root_to_group: dict = {}
+    for i in range(len(photos)):
+        r = find(i)
+        if r not in root_to_group:
+            root_to_group[r] = []
+        root_to_group[r].append(photos[i])
+
+    groups = list(root_to_group.values())
 
     dup_groups = [g for g in groups if len(g) > 1]
     singles    = [g for g in groups if len(g) == 1]
@@ -131,7 +141,10 @@ def group_duplicates(photos: list[PhotoInfo]) -> list[list[PhotoInfo]]:
 
 def _encode(path: str, max_size=900) -> Optional[str]:
     try:
-        img = Image.open(path).convert('RGB')
+        try:
+            img = Image.open(path).convert('RGB')
+        except Exception:
+            return None
         img.thumbnail((max_size, max_size))
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=85)
@@ -199,7 +212,7 @@ def _gemini_pick_best_in_group(model, group: list[PhotoInfo], max_keep: int) -> 
         resp = model.generate_content(content)
         raw = resp.text.strip()
         indices = [int(t) for t in raw.replace(' ', '').split(',')
-                   if t.strip().isdigit() and int(t.strip()) < len(valid)]
+                   if t.strip() and t.strip().isdigit() and int(t.strip()) < len(valid)]
         if not indices:
             return valid[:max_keep]
         return [valid[i] for i in sorted(set(indices))[:max_keep]]
@@ -234,7 +247,7 @@ def _gemini_filter_singles(model, photos: list[PhotoInfo]) -> list[str]:
             if '없음' in raw:
                 continue
             for t in raw.replace(' ', '').split(','):
-                if t.strip().isdigit():
+                if t.strip() and t.strip().isdigit():
                     idx = int(t.strip())
                     if idx < len(valid):
                         delete_paths.append(valid[idx].local_path)
